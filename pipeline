@@ -1,0 +1,164 @@
+provider "aws" {
+  region = "us-east-2"
+}
+
+resource "aws_codebuild_project" "tf-plan" {
+  name          = "tf-cicd-plan2"
+  description   = "Plan stage for terraform"
+  service_role  = aws_iam_role.tf-codebuild-role.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/standard:5.0"
+    type                        = "LINUX_CONTAINER"
+  image_pull_credentials_type = "CODEBUILD"
+
+      environment_variable {
+        name = "TERRAFORM_VERSION"
+        value = "1.1.9"
+      }
+      environment_variable {
+        name = "TF_COMMAND"
+        value = "apply"
+        type = "PLAINTEXT"
+      }
+    }
+
+    logs_config {
+    cloudwatch_logs {
+      status = "ENABLED"
+    }
+
+    s3_logs {
+      encryption_disabled = false
+      status              = "DISABLED"
+    }
+  }
+ 
+ source {
+     type   = "CODEPIPELINE"
+     buildspec = "buildspec.yml"
+ }
+ tags = {
+   "Terraform" = "true"
+ }
+}
+
+
+resource "aws_codepipeline" "cicd_pipeline" {
+
+    name = "tf-cicd"
+    role_arn = aws_iam_role.tf-codepipeline-role.arn
+
+    artifact_store {
+        type="S3"
+        location = aws_s3_bucket.codepipeline_artifacts.id
+    }
+
+    stage {
+        name = "Source"
+        action{
+            name = "Source"
+            category = "Source"
+            owner = "AWS"
+            provider = "CodeCommit"
+            version = "1"
+            run_order = 1
+            output_artifacts = ["tf-code"]
+            configuration = {
+                # FullRepositoryId = "rajatkr-devops/terraform"
+                BranchName   = "master"
+                RepositoryName = var.git_repository_name
+                PollForSourceChanges = "false"
+                # ConnectionArn = var.codestar_connector_credentials
+                # OutputArtifactFormat = "CODE_ZIP"
+            }
+        }
+    }
+
+    stage {
+        name ="Plan"
+        action{
+            name = "Build"
+            category = "Build"
+            provider = "CodeBuild"
+            version = "1"
+            owner = "AWS"
+            input_artifacts = ["tf-code"]
+            configuration = {
+                ProjectName = "tf-cicd-plan2"
+            }
+        }
+    }
+    stage {
+  name = "Manual_Approval"
+
+  action {
+    name     = "Manual-Approval"
+    category = "Approval"
+    owner    = "AWS"
+    provider = "Manual"
+    version  = "1"
+  }
+}
+
+  stage {
+    name = "Terraform_Apply"
+
+    action {
+      name            = "Terraform-Apply"
+      category        = "Build"
+      owner           = "AWS"
+      provider        = "CodeBuild"
+      version         = "1"
+            input_artifacts = ["tf-code"]
+            configuration = {
+                ProjectName = "tf-cicd-plan2"
+      }
+    }
+  }
+#     stage {
+#         name ="Deploy"
+#         action{
+#             name = "Deploy"
+#             category = "Build"
+#             provider = "CodeBuild"
+#             version = "1"
+#             owner = "AWS"
+#             input_artifacts = ["tf-code"]
+#             configuration = {
+#                 ProjectName = "tf-cicd-apply"
+#             }
+#         }
+#     }
+
+ }
+ # adding cloudwatch tigger 
+ resource "aws_cloudwatch_event_rule" "codecommit_activity" {
+  # name_prefix = "${var.tag}-${var.branch_to_monitor}-activity"
+  name = "codecommit"
+  description = "Detect commits to CodeCommit repo of "
+
+  event_pattern = <<PATTERN
+{
+  "detail-type": ["CodeCommit Repository State Change"],
+  "resources": ["arn:aws:codecommit:us-east-2:804075638102:gitlabclone"],
+  "source": ["aws.codecommit"],
+  "detail": {
+    "event": ["referenceCreated", "referenceUpdated"],
+    "referenceName": ["master"]
+  }
+}
+PATTERN
+}
+
+resource "aws_cloudwatch_event_target" "cloudwatch_triggers_pipeline" {
+  target_id = "commits-trigger-pipeline"
+  rule = aws_cloudwatch_event_rule.codecommit_activity.name
+  arn = aws_codepipeline.cicd_pipeline.arn
+  role_arn = aws_iam_role.cloudwatch_ci_role.arn
+}
