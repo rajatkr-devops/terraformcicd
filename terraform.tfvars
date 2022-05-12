@@ -1,0 +1,5 @@
+# # # codestar_connector_credentials = "arn:aws:codestar-connections:us-east-2:804075638102:connection/bc50b56f-992e-4dfd-8bd8-8448168938e9"
+ git_repository_name = "gitlabclone"
+codecommit_repo_arn = "arn:aws:codecommit:us-east-2:xxxxxx:gitlabclone"
+branch_to_monitor = "master"
+# tag = "event"
